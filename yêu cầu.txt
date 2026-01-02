@@ -1,0 +1,747 @@
+# 🤖 MASTER PROMPT: WoT Blitz Mod Studio Builder
+
+**Target AI Agent**: GitHub Copilot / Claude / GPT-4 in Codespace
+
+## 📋 PROJECT CONTEXT
+
+You are building a **professional GUI application** for modding World of Tanks Blitz UI files. This is a **complete, production-ready system** that must be built from scratch using reference implementations as guidance.
+
+### Primary Objective
+Create a Wails v2 application that allows modders to:
+1. Open encrypted DVPL files
+2. Edit YAML UI configurations in a Monaco editor
+3. Preview changes in real-time
+4. Save back to encrypted DVPL format
+5. **All operations must happen IN-MEMORY with ZERO temp files**
+
+### Target Platform
+- **Primary**: Debian Linux ARM64
+- **Package Format**: .deb
+- **Binary Size Target**: < 50MB
+- **Memory Usage Target**: < 200MB
+
+---
+
+## 📚 REFERENCE SOURCES ANALYSIS
+
+I have downloaded these sources to `internal_docs/sources/`. Your FIRST task is to analyze them:
+
+### Source 1: dvpl_converter-4.2.0 (Pure Go - PRIORITY)
+**Location**: `internal_docs/sources/dvpl_converter-4.2.0/`
+
+**Key Files to Analyze**:
+```
+common/dvpl/dvpl.go          # Core DVPL logic - USE THIS AS BASE
+common/utils/checkFile.go     # File validation
+cmd/encrypt.go                # Encryption workflow
+cmd/decrypt.go                # Decryption workflow
+```
+
+**What to Extract**:
+- [ ] `EncryptDVPL(inputBuf []byte) ([]byte, error)` function
+- [ ] `DecryptDVPL(inputBuf []byte) ([]byte, error)` function
+- [ ] DVPL footer structure (20 bytes: originalSize, compressedSize, crc32, compressType, "DVPL" marker)
+- [ ] LZ4 compression logic using `github.com/pierrec/lz4/v4`
+- [ ] CRC32 validation using `hash/crc32`
+
+**Critical Implementation Detail**:
+```go
+// DVPL Footer Structure (from dvpl.go)
+outputBuf = binary.LittleEndian.AppendUint32(data, uint32(originalSize))
+outputBuf = binary.LittleEndian.AppendUint32(outputBuf, uint32(compressedSize))
+outputBuf = binary.LittleEndian.AppendUint32(outputBuf, crc32DataSum)
+outputBuf = binary.LittleEndian.AppendUint32(outputBuf, compressType)
+outputBuf = append(outputBuf, []byte("DVPL")...)
+```
+
+### Source 2: dvpl_go-1.3.3 (CGO Version - REFERENCE ONLY)
+**Location**: `internal_docs/sources/dvpl_go-1.3.3/`
+
+**Purpose**: Performance comparison, DO NOT port CGO code for ARM64 build.
+
+**Key Insights**:
+- Uses native `lz4.h` via CGO
+- Has YAML config support (`out/.dvpl_go.yml`)
+- Multi-threaded batch processing
+- **Ignore the CGO parts**, but study the workflow logic
+
+### Source 3: packed_webp-1.1 (WebP Handler)
+**Location**: `internal_docs/sources/packed_webp-1.1/`
+
+**Key Files**:
+```
+main_logic.go     # UnpackWebp() and PackWebp()
+```
+
+**What to Extract**:
+- [ ] WebP + txt metadata packing format
+- [ ] "extr" marker detection logic
+- [ ] Atlas frame parsing from txt files
+
+**Atlas Format** (from actual WoT Blitz files):
+```
+modules_button_res@2x.packed.webp  ← filename
+360 140                            ← display size
+1                                  ← frame count
+0 0 360 140 0 0 0 frame0          ← x0 y0 x1 y1 offsetX offsetY unknown name
+```
+
+### Source 4: RXD-MODPACK-PROJ-4.1.0 (Real YAML Examples)
+**Location**: `internal_docs/sources/RXD-MODPACK-PROJ-4.1.0/`
+
+**Purpose**: Understand ACTUAL Dava Engine YAML structure
+
+**Critical Files to Study**:
+```
+Data/Gui/*.yaml               # Real UI files
+Data/Gui/*.sc2                # Encrypted DVPL files
+Data/3d/Gui/UI/              # Asset references
+```
+
+**YAML Structure Pattern** (extract from real files):
+```yaml
+header:
+  version: 1
+
+root:
+  className: UIControl
+  name: MainScreen
+  position: [0, 0]              # ← [x, y] format - CRITICAL
+  size: [1920, 1080]            # ← [width, height] format
+  background:
+    sprite: "~res:/Gfx/UI/..."  # ← Asset path format
+    drawType: STRETCH_BOTH
+    color: [1, 1, 1, 1]         # ← [r, g, b, a] format
+  children:
+    - className: UIControl
+      name: HeaderPanel
+      position: [0, 0]
+      size: [1920, 80]
+```
+
+**Key YAML Patterns to Support**:
+- Vector2: `[x, y]` 
+- Size: `[width, height]`
+- Color: `[r, g, b, a]` (0.0-1.0 range)
+- Asset paths: `~res:/` prefix
+- Nested children hierarchy
+
+### Source 5: DavaResourceEditor35-25.exe (Reference Only)
+**Location**: `internal_docs/sources/DavaResourceEditor35-25.exe`
+
+**Purpose**: Understand official Dava Engine tool behavior
+
+**What to Extract**:
+- UI layout conventions
+- File format expectations
+- Error handling patterns
+
+---
+
+## 🏗️ SYSTEM ARCHITECTURE
+
+### Technology Stack (NON-NEGOTIABLE)
+
+```yaml
+Backend:
+  Language: Go 1.21+
+  Framework: Wails v2.8.0
+  UI: Embedded WebKit
+  
+Frontend:
+  Framework: Svelte 4.2.8
+  Bundler: Vite 5.0.8
+  Editor: Monaco Editor (YAML mode)
+  
+Key Libraries:
+  - gopkg.in/yaml.v3           # YAML parsing
+  - github.com/pierrec/lz4/v4  # LZ4 compression (ARM64 compatible)
+  - golang.org/x/image         # Image decoding
+```
+
+### Directory Structure (MUST FOLLOW EXACTLY)
+
+```
+wot-blitz-mod-studio/
+├── main.go                       # Wails entry point
+├── app.go                        # Go ↔ Svelte bridge
+├── go.mod
+├── wails.json
+│
+├── backend/
+│   ├── dvpl/
+│   │   ├── dvpl.go              # Port from dvpl_converter
+│   │   └── stream.go            # In-memory processing
+│   │
+│   ├── yaml/
+│   │   ├── parser.go            # YAML ↔ Struct
+│   │   ├── formatter.go         # Beautify YAML
+│   │   ├── validator.go         # Real-time validation
+│   │   ├── models.go            # Data structures
+│   │   └── types/
+│   │       ├── control.go       # UIControl with custom unmarshalers
+│   │       └── package.go       # UIPackage root
+│   │
+│   ├── assets/
+│   │   ├── scanner.go           # Index game files
+│   │   ├── resolver.go          # ~res:/ path resolution
+│   │   └── cache.go             # LRU asset cache
+│   │
+│   └── gfx/
+│       ├── webp.go              # WebP decoder
+│       ├── atlas.go             # Texture atlas parser
+│       └── preview.go           # Canvas renderer
+│
+├── pkg/
+│   ├── dvpl_converter/          # Pure Go DVPL (from source)
+│   │   └── dvpl.go
+│   └── dava/                    # Minimal Dava emulation
+│       ├── control.go
+│       └── renderer.go
+│
+└── frontend/
+    ├── package.json
+    ├── vite.config.js
+    ├── index.html
+    └── src/
+        ├── main.js
+        ├── App.svelte           # 3-column layout
+        ├── lib/
+        │   ├── api.js           # Backend calls
+        │   └── store.js         # Svelte stores
+        └── components/
+            ├── Toolbar.svelte   # Top bar
+            ├── Sidebar.svelte   # Column 1: Tree
+            ├── Editor.svelte    # Column 2: Monaco
+            └── Preview.svelte   # Column 3: Canvas
+```
+
+---
+
+## 🎯 IMPLEMENTATION PHASES
+
+### PHASE 1: Setup & Source Analysis (YOU ARE HERE)
+
+**Tasks**:
+1. [ ] Analyze `dvpl_converter-4.2.0/common/dvpl/dvpl.go`
+2. [ ] Extract `EncryptDVPL` and `DecryptDVPL` functions
+3. [ ] Study RXD-MODPACK YAML files for real-world patterns
+4. [ ] Identify all YAML field types (Vector2, Color, etc.)
+5. [ ] Document asset path patterns (`~res:/`)
+
+**Expected Output**:
+```markdown
+# SOURCE_ANALYSIS.md
+
+## DVPL Format
+- Footer: 20 bytes
+- Compression: LZ4 block mode
+- CRC32: IEEE polynomial
+
+## YAML Patterns Found
+- Vector2: [x, y] - needs custom UnmarshalYAML
+- Color: [r, g, b, a] - needs custom UnmarshalYAML
+- Asset paths: ~res:/ prefix
+
+## Questions/Ambiguities
+- Q: Handle .sc2 vs .yaml extensions?
+  A: .sc2 is encrypted DVPL, .yaml is plaintext
+```
+
+### PHASE 2: Backend Core - DVPL Engine
+
+**File**: `backend/dvpl/dvpl.go`
+
+**Implementation Requirements**:
+
+```go
+package dvpl
+
+import (
+    "encoding/binary"
+    "errors"
+    "hash/crc32"
+    "github.com/pierrec/lz4/v4"
+)
+
+// CRITICAL: Port EXACTLY from dvpl_converter-4.2.0/common/dvpl/dvpl.go
+
+func EncryptDVPL(inputBuf []byte) ([]byte, error) {
+    // 1. Compress with LZ4
+    // 2. Compare compressed vs original size
+    // 3. Use smaller (skip compression if larger)
+    // 4. Build footer: [originalSize][compressedSize][crc32][type][DVPL]
+    // 5. Return: [data][footer]
+}
+
+func DecryptDVPL(inputBuf []byte) ([]byte, error) {
+    // 1. Validate last 4 bytes == "DVPL"
+    // 2. Parse footer (20 bytes from end)
+    // 3. Validate CRC32
+    // 4. Decompress if type != 0
+    // 5. Return original data
+}
+```
+
+**Test Cases** (create these):
+```go
+func TestDVPLRoundtrip(t *testing.T) {
+    original := []byte("test data for DVPL encryption")
+    
+    encrypted, err := EncryptDVPL(original)
+    // Assert: err == nil
+    // Assert: bytes.HasSuffix(encrypted, []byte("DVPL"))
+    
+    decrypted, err := DecryptDVPL(encrypted)
+    // Assert: bytes.Equal(original, decrypted)
+}
+```
+
+### PHASE 3: Backend Core - YAML Parser
+
+**File**: `backend/yaml/types/control.go`
+
+**CRITICAL Custom Unmarshaler**:
+
+```go
+package types
+
+type Vector2 struct {
+    X, Y float64
+}
+
+// MUST implement this for [x, y] array format
+func (v *Vector2) UnmarshalYAML(unmarshal func(interface{}) error) error {
+    var arr [2]float64
+    if err := unmarshal(&arr); err != nil {
+        return err
+    }
+    v.X = arr[0]
+    v.Y = arr[1]
+    return nil
+}
+
+func (v Vector2) MarshalYAML() (interface{}, error) {
+    return [2]float64{v.X, v.Y}, nil
+}
+
+type UIControl struct {
+    Name       string     `yaml:"name"`
+    ClassName  string     `yaml:"className"`
+    Position   *Vector2   `yaml:"position,omitempty"`   // [x, y]
+    Size       *Vector2   `yaml:"size,omitempty"`       // [w, h]
+    Background *Background `yaml:"background,omitempty"`
+    Children   []*UIControl `yaml:"children,omitempty"`
+}
+
+type Background struct {
+    Sprite   string  `yaml:"sprite,omitempty"`   // ~res:/...
+    DrawType string  `yaml:"drawType,omitempty"` // STRETCH_BOTH, TILED, etc
+    Color    *Color  `yaml:"color,omitempty"`    // [r, g, b, a]
+}
+
+type Color struct {
+    R, G, B, A float64
+}
+
+// Custom unmarshal for [r, g, b, a]
+func (c *Color) UnmarshalYAML(unmarshal func(interface{}) error) error {
+    var arr [4]float64
+    if err := unmarshal(&arr); err != nil {
+        return err
+    }
+    c.R, c.G, c.B, c.A = arr[0], arr[1], arr[2], arr[3]
+    return nil
+}
+```
+
+**Parser Interface**:
+
+```go
+// backend/yaml/parser.go
+package yaml
+
+type Parser struct{}
+
+func NewParser() *Parser {
+    return &Parser{}
+}
+
+func (p *Parser) Parse(content []byte) (*types.UIPackage, error) {
+    var pkg types.UIPackage
+    err := yaml.Unmarshal(content, &pkg)
+    return &pkg, err
+}
+
+func (p *Parser) Generate(pkg *types.UIPackage) ([]byte, error) {
+    return yaml.Marshal(pkg)
+}
+```
+
+### PHASE 4: Frontend - 3-Column Layout
+
+**File**: `frontend/src/App.svelte`
+
+```svelte
+<script>
+  import Toolbar from './components/Toolbar.svelte';
+  import Sidebar from './components/Sidebar.svelte';
+  import Editor from './components/Editor.svelte';
+  import Preview from './components/Preview.svelte';
+</script>
+
+<div class="app">
+  <Toolbar on:open={handleOpen} on:save={handleSave} />
+  
+  <div class="main" style="display: grid; grid-template-columns: 300px 1fr 500px;">
+    <Sidebar />   <!-- Column 1: Tree -->
+    <Editor />    <!-- Column 2: Monaco -->
+    <Preview />   <!-- Column 3: Canvas -->
+  </div>
+</div>
+```
+
+**Monaco Integration** (`frontend/src/components/Editor.svelte`):
+
+```svelte
+<script>
+  import { onMount } from 'svelte';
+  import { currentContent } from '../lib/store.js';
+  
+  let editor;
+  
+  onMount(() => {
+    // Load Monaco from CDN or bundle
+    const monaco = window.monaco;
+    
+    editor = monaco.editor.create(container, {
+      value: $currentContent,
+      language: 'yaml',
+      theme: 'vs-dark',
+      automaticLayout: true,
+    });
+    
+    editor.onDidChangeModelContent(() => {
+      currentContent.set(editor.getValue());
+    });
+  });
+</script>
+
+<div bind:this={container} style="height: 100%;"></div>
+```
+
+### PHASE 5: Integration - Complete Data Flow
+
+**Workflow**:
+
+```
+User: Click "Open File"
+  ↓
+Frontend: SelectFile() → path
+  ↓
+Backend: app.OpenFile(path)
+  ├─ Read file
+  ├─ DetectFormat (DVPL or YAML)
+  ├─ If DVPL: DecryptDVPL(data)
+  ├─ ParseYAML(decrypted)
+  └─ Return: { path, content, package, assets }
+  ↓
+Frontend: 
+  ├─ editor.setValue(content)
+  ├─ buildControlTree(package)
+  └─ scanAssets(package)
+```
+
+**Backend Bridge** (`app.go`):
+
+```go
+func (a *App) OpenFile(path string) (*yaml.FileData, error) {
+    data, _ := os.ReadFile(path)
+    
+    // Detect format
+    var yamlContent []byte
+    if isDVPL(data) {
+        yamlContent, _ = dvpl.DecryptDVPL(data)
+    } else {
+        yamlContent = data
+    }
+    
+    // Parse
+    pkg, _ := a.parser.Parse(yamlContent)
+    
+    // Scan assets
+    assets := a.scanner.ScanAssets(pkg)
+    
+    return &yaml.FileData{
+        Path:    path,
+        Content: string(yamlContent),
+        Package: pkg,
+        Assets:  assets,
+    }, nil
+}
+```
+
+---
+
+## 🚨 CRITICAL CONSTRAINTS
+
+### 1. Zero Temp Files (MANDATORY)
+
+```go
+// ❌ NEVER do this:
+ioutil.WriteFile("/tmp/decrypted.yaml", data, 0644)
+
+// ✅ ALWAYS do this:
+decrypted := dvpl.DecryptDVPL(data)  // in-memory
+modified := edit(decrypted)           // in-memory
+encrypted := dvpl.EncryptDVPL(modified) // in-memory
+```
+
+### 2. ARM64 Optimization
+
+```go
+// ✅ Use Pure Go libraries ONLY
+import "github.com/pierrec/lz4/v4"  // Works on ARM64
+
+// ❌ NEVER use CGO for production ARM64 build
+// #cgo LDFLAGS: -llz4  ← NO!
+```
+
+### 3. Error Handling Pattern
+
+```go
+// Every function must return detailed errors:
+func (p *Parser) Parse(data []byte) (*UIPackage, error) {
+    if len(data) == 0 {
+        return nil, fmt.Errorf("empty data")
+    }
+    
+    var pkg UIPackage
+    if err := yaml.Unmarshal(data, &pkg); err != nil {
+        return nil, fmt.Errorf("yaml parse failed: %w", err)
+    }
+    
+    return &pkg, nil
+}
+```
+
+### 4. Asset Path Resolution
+
+```go
+// Input:  ~res:/Gfx/UI/MainScreen/bg.webp
+// Search: 
+//   1. {gameDataPath}/3d/UI/MainScreen/bg.webp
+//   2. {gameDataPath}/Gfx/UI/MainScreen/bg.webp
+//   3. {gameDataPath}/UI/MainScreen/bg.webp
+// Cache: Store resolved path for reuse
+```
+
+---
+
+## 🧪 TESTING STRATEGY
+
+### Unit Tests (Write FIRST)
+
+```go
+// backend/dvpl/dvpl_test.go
+func TestEncryptDecrypt(t *testing.T)
+func TestDVPLFooterParsing(t *testing.T)
+func TestCRC32Validation(t *testing.T)
+
+// backend/yaml/parser_test.go
+func TestVector2Unmarshal(t *testing.T)
+func TestColorUnmarshal(t *testing.T)
+func TestControlHierarchy(t *testing.T)
+```
+
+### Integration Tests
+
+```go
+// Test with REAL files from RXD-MODPACK
+func TestRealYAMLParsing(t *testing.T) {
+    data, _ := os.ReadFile("internal_docs/sources/RXD-MODPACK/.../mainScreen.yaml")
+    pkg, err := parser.Parse(data)
+    assert.NoError(t, err)
+    assert.Equal(t, "MainScreen", pkg.Root.Name)
+}
+```
+
+### Manual Testing Checklist
+
+```markdown
+- [ ] Open encrypted .sc2 file
+- [ ] Edit position: [0, 0] → [100, 100]
+- [ ] Save file
+- [ ] Verify file size unchanged (no bloat)
+- [ ] Re-open and verify changes persisted
+- [ ] Check: No temp files in /tmp
+```
+
+---
+
+## 📦 BUILD & PACKAGE
+
+### Build Command
+
+```bash
+# ARM64 build
+CGO_ENABLED=0 wails build -platform linux/arm64 -clean
+
+# Create .deb
+dpkg-deb --build debian-package wot-blitz-mod-studio_1.0.0_arm64.deb
+```
+
+### Debian Package Structure
+
+```
+wot-blitz-mod-studio_1.0.0_arm64.deb
+├── DEBIAN/
+│   ├── control          # Package metadata
+│   ├── postinst         # Post-install script
+│   └── prerm            # Pre-remove script
+├── usr/local/bin/
+│   └── wot-blitz-mod-studio  # Binary
+└── usr/share/
+    ├── applications/
+    │   └── wot-blitz-mod-studio.desktop
+    └── pixmaps/
+        └── wot-blitz-mod-studio.png
+```
+
+---
+
+## 🎯 SUCCESS CRITERIA
+
+Build is complete when:
+
+- [ ] Can open `.sc2.dvpl` files from RXD-MODPACK
+- [ ] YAML displays in Monaco with syntax highlighting
+- [ ] Can edit `position: [0, 0]` → `[100, 100]`
+- [ ] Changes reflect in preview canvas
+- [ ] Saves back to `.sc2.dvpl` with correct encryption
+- [ ] Zero temp files created (verify with `ls /tmp`)
+- [ ] Binary size < 50MB
+- [ ] Startup time < 2 seconds
+- [ ] Memory usage < 200MB during editing
+
+---
+
+## 🤖 AI AGENT INSTRUCTIONS
+
+**You are now the Build Agent. Follow this sequence:**
+
+### Step 1: Source Code Analysis (DO THIS FIRST)
+```bash
+# Analyze downloaded sources
+cd internal_docs/sources/
+
+# Study DVPL implementation
+cat dvpl_converter-4.2.0/common/dvpl/dvpl.go
+# → Extract: EncryptDVPL, DecryptDVPL logic
+
+# Study YAML patterns
+find RXD-MODPACK-PROJ-4.1.0/Data/Gui -name "*.yaml" | head -5 | xargs cat
+# → Identify: Vector2 format, Color format, Asset paths
+
+# Study WebP handling
+cat packed_webp-1.1/main_logic.go
+# → Extract: UnpackWebp logic
+```
+
+### Step 2: Create Project Skeleton
+```bash
+wails init -n wot-blitz-mod-studio -t svelte
+cd wot-blitz-mod-studio
+```
+
+### Step 3: Implement Backend (Priority Order)
+1. `backend/dvpl/dvpl.go` (Port from source)
+2. `backend/yaml/types/control.go` (Custom unmarshalers)
+3. `backend/yaml/parser.go` (YAML ↔ Struct)
+4. `app.go` (Bridge API)
+
+### Step 4: Implement Frontend
+1. `frontend/src/App.svelte` (3-column layout)
+2. `frontend/src/components/Editor.svelte` (Monaco)
+3. `frontend/src/lib/api.js` (Backend calls)
+
+### Step 5: Integration Testing
+```bash
+# Test with real files
+wails dev
+# → Open: RXD-MODPACK/.../mainScreen.sc2.dvpl
+# → Edit: position values
+# → Save and verify
+```
+
+### Step 6: Build & Package
+```bash
+./build-arm64.sh
+```
+
+---
+
+## 📝 REPORTING FORMAT
+
+As you work, report progress in this format:
+
+```markdown
+## Progress Report: [Phase Name]
+
+### Completed
+- ✅ Analyzed dvpl_converter source
+- ✅ Extracted EncryptDVPL function
+- ✅ Created backend/dvpl/dvpl.go
+
+### In Progress
+- 🔄 Implementing custom YAML unmarshalers
+- 🔄 Testing Vector2 [x, y] parsing
+
+### Blockers
+- ❌ Need clarification: DrawType enum values?
+  → Check: RXD-MODPACK YAML examples
+
+### Next Steps
+1. Complete Color unmarshal
+2. Test with real mainScreen.yaml
+3. Implement asset scanner
+```
+
+---
+
+## 🚀 START HERE
+
+**Your first action**:
+
+```bash
+# 1. Analyze the DVPL source
+cat internal_docs/sources/dvpl_converter-4.2.0/common/dvpl/dvpl.go
+
+# 2. Create analysis document
+cat > SOURCE_ANALYSIS.md << 'EOF'
+# DVPL Format Analysis
+
+## Key Functions Extracted
+
+### EncryptDVPL
+```go
+[paste the function here]
+```
+
+### DecryptDVPL
+```go
+[paste the function here]
+```
+
+## YAML Patterns Found
+[list patterns from RXD-MODPACK files]
+EOF
+```
+
+**Then proceed with Phase 1 → Phase 6 in order.**
+
+---
+
+**Remember**: This is a COMPLETE, PRODUCTION-READY system. Every file must be fully implemented, tested, and documented. No placeholders, no TODOs, no shortcuts.
+
+**GO BUILD! 🚀**
