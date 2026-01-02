@@ -4,7 +4,7 @@
   import Editor from './components/Editor.svelte'
   import Preview from './components/Preview.svelte'
   import { writable } from 'svelte/store'
-  import { OpenFile, SaveFile, ParseYAML } from '../wailsjs/go/main/App.js'
+  import { OpenFile, SaveFile, ParseYAML, SelectFile } from '../wailsjs/go/main/App.js'
 
   let currentFile = null
   let currentContent = writable('')
@@ -15,11 +15,20 @@
 
   async function handleOpenFile() {
     try {
-      // In a real app, we'd use a file picker
-      // For now, this is a placeholder
-      console.log('Open file handler needed')
+      // Open file picker
+      const filePath = await SelectFile()
+      if (!filePath) return
+
+      // Open the selected file
+      const data = await OpenFile(filePath)
+      currentFile = filePath
+      currentContent.set(data.content)
+      currentPackage.set(data.package)
+      currentAssets.set(data.assets || [])
+      fileIsDVPL = data.wasDVPL || false
     } catch (error) {
       console.error('Error opening file:', error)
+      alert('Error opening file: ' + error)
     }
   }
 

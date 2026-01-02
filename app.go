@@ -7,6 +7,8 @@ import (
 
 	"wot-blitz-mod-studio/backend/dvpl"
 	"wot-blitz-mod-studio/backend/yaml"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App struct
@@ -157,6 +159,55 @@ func (a *App) GenerateYAML(pkg *yaml.UIPackage) (string, error) {
 // FindControl finds a control by name in the current package
 func (a *App) FindControl(pkg *yaml.UIPackage, name string) *yaml.UIControl {
 	return a.parser.FindControlByName(pkg, name)
+}
+
+// SelectFile opens a file picker dialog
+func (a *App) SelectFile() (string, error) {
+	options := runtime.OpenDialogOptions{
+		DefaultDirectory: a.gameDataPath,
+		Title:            "Select YAML or DVPL file",
+		Filters: []runtime.FileFilter{
+			{
+				DisplayName: "UI Files (*.yaml, *.sc2, *.dvpl)",
+				Pattern:     "*.yaml;*.sc2;*.dvpl",
+			},
+			{
+				DisplayName: "YAML files (*.yaml)",
+				Pattern:     "*.yaml",
+			},
+			{
+				DisplayName: "DVPL files (*.sc2, *.dvpl)",
+				Pattern:     "*.sc2;*.dvpl",
+			},
+			{
+				DisplayName: "All files (*.*)",
+				Pattern:     "*.*",
+			},
+		},
+	}
+
+	filePath, err := runtime.OpenFileDialog(a.ctx, options)
+	if err != nil {
+		return "", err
+	}
+
+	return filePath, nil
+}
+
+// SelectFolder opens a folder picker dialog
+func (a *App) SelectFolder() (string, error) {
+	options := runtime.OpenDialogOptions{
+		DefaultDirectory: a.gameDataPath,
+		Title:            "Select WoT Blitz Game Data Folder",
+	}
+
+	folderPath, err := runtime.OpenFileDialog(a.ctx, options)
+	if err != nil {
+		return "", err
+	}
+
+	a.gameDataPath = folderPath
+	return folderPath, nil
 }
 
 // Greet returns a greeting for the given name
