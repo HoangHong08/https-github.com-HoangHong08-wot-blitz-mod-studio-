@@ -80,21 +80,21 @@ jobs:
     
     - name: Upload artifact (Linux)
       if: startsWith(matrix.os, 'ubuntu')
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.output_name }}
         path: build/bin/${{ matrix.output_name }}
     
     - name: Upload artifact (macOS)
       if: startsWith(matrix.os, 'macos')
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.output_name }}
         path: build/bin/${{ matrix.output_name }}
     
     - name: Upload artifact (Windows)
       if: runner.os == 'Windows'
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.output_name }}
         path: build/bin/${{ matrix.output_name }}.exe
